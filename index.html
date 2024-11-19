@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nautix EEZ Alert</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        background: #f0f2f5;
+        margin: 0;
+      }
+      #login-form {
+        background: #ffffff;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        padding: 40px;
+        width: 350px;
+        border-radius: 8px;
+        text-align: center;
+      }
+      #login-form h2 {
+        color: #333;
+        margin-bottom: 20px;
+      }
+      #login-form label {
+        display: block;
+        color: #555;
+        margin: 10px 0 5px;
+        text-align: left;
+      }
+      #login-form input[type="text"],
+      #login-form input[type="password"] {
+        width: 100%;
+        padding: 10px;
+        margin-bottom: 15px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+      #login-form button {
+        width: 100%;
+        padding: 10px;
+        background-color: #007bff;
+        color: white;
+        font-size: 16px;
+        font-weight: bold;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background 0.3s ease;
+      }
+      #login-form button:hover {
+        background-color: #0056b3;
+      }
+      #login-status {
+        margin-top: 10px;
+        color: red;
+      }
+      #map-container {
+        display: none;
+        width: 90%;
+        max-width: 1200px;
+        margin: auto;
+        padding-top: 20px;
+        text-align: center;
+      }
+      #map {
+        height: 600px;
+        width: 100%;
+        border-radius: 8px;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+      }
+      .status-message {
+        font-size: 20px;
+        font-weight: bold;
+        padding: 10px;
+        color: white;
+        background-color: #333;
+        border-radius: 5px;
+        width: auto;
+        text-align: center;
+      }
+      .inside-boundary {
+        background-color: green;
+      }
+      .outside-boundary {
+        background-color: red;
+      }
+      #buzzer-toggle {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        padding: 10px 20px;
+        font-size: 16px;
+        font-weight: bold;
+        color: white;
+        background-color: #007bff;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background 0.3s;
+      }
+      #buzzer-toggle.active {
+        background-color: #d9534f;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="login-form">
+      <h2>Login to Nautix</h2>
+      <form onsubmit="return authenticateUser(event)">
+        <label for="username">Username</label>
+        <input type="text" id="username" required />
+        <label for="password">Password</label>
+        <input type="password" id="password" required />
+        <button type="submit">Login</button>
+      </form>
+      <p id="login-status"></p>
+    </div>
+
+    <div id="map-container">
+      <h2>Exclusive Economic Zone Boundary Checker</h2>
+      <button id="buzzer-toggle" class="active" onclick="toggleBuzzer()">
+        Buzzer: ON
+      </button>
+      <div id="map"></div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script>
+      const credentials = { username: "nautix", password: "123" };
+      let map, eezCircle, statusControl, currentLocationMarker;
+      const alertSound = new Audio(
+        "https://www.dropbox.com/scl/fi/89asc9lzphv47haed70yg/alert-sound.mp3?rlkey=h62kn5ofck7yrrs80dmx7thpu&st=sdgex0yf&raw=1"
+      ); // Buzzer sound URL
+      alertSound.loop = true; // Enable continuous looping
+      const refreshInterval = 5000; // 5 seconds
+      const radius = 10; // Radius for boundary in meters
+      let isOutsideBoundary = false; // Track if user is outside the boundary
+      let buzzerEnabled = true; // Buzzer is on by default
+      let lastValidPosition = null; // Track the last valid position
+
+      function authenticateUser(event) {
+        event.preventDefault();
+        const enteredUsername = document.getElementById("username").value;
+        const enteredPassword = document.getElementById("password").value;
+
+        if (
+          enteredUsername === credentials.username &&
+          enteredPassword === credentials.password
+        ) {
+          document.getElementById("login-form").style.display = "none";
+          document.getElementById("map-container").style.display = "block";
+          initializeMap();
+        } else {
+          document.getElementById("login-status").textContent =
+            "Invalid username or password.";
+        }
+      }
+
+      function initializeMap() {
+        const centerLat = 9.882611;
+        const centerLng = 78.081167;
+        map = L.map("map").setView([centerLat, centerLng], 17);
+
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19,
+        }).addTo(map);
+
+        eezCircle = L.circle([centerLat, centerLng], {
+          color: "blue",
+          fillColor: "#aaddff",
+          fillOpacity: 0.4,
+          radius: radius,
+        }).addTo(map);
+
+        statusControl = L.control({ position: "topright" });
+        statusControl.onAdd = function () {
+          const div = L.DomUtil.create("div", "status-message");
+          div.innerHTML = "Tracking your location...";
+          return div;
+        };
+        statusControl.addTo(map);
+
+        trackLiveLocation();
+      }
+
+      function toggleBuzzer() {
+        buzzerEnabled = !buzzerEnabled;
+        const button = document.getElementById("buzzer-toggle");
+        if (buzzerEnabled) {
+          button.classList.add("active");
+          button.textContent = "Buzzer: ON";
+          if (isOutsideBoundary) alertSound.play();
+        } else {
+          button.classList.remove("active");
+          button.textContent = "Buzzer: OFF";
+          alertSound.pause();
+          alertSound.currentTime = 0;
+        }
+      }
+
+      function checkBoundary(latitude, longitude) {
+        const point = L.latLng(latitude, longitude);
+
+        if (eezCircle.getBounds().contains(point)) {
+          if (isOutsideBoundary) {
+            isOutsideBoundary = false;
+            alertSound.pause(); // Stop the buzzer
+            alertSound.currentTime = 0; // Reset sound to the beginning
+          }
+          statusControl.getContainer().innerHTML =
+            "<div class='status-message inside-boundary'>Within the EEZ boundary.</div>";
+        } else {
+          if (!isOutsideBoundary && buzzerEnabled) {
+            alertSound.play(); // Start sound once when boundary is crossed
+          }
+          isOutsideBoundary = true;
+          statusControl.getContainer().innerHTML =
+            "<div class='status-message outside-boundary'>Alert! Outside the EEZ boundary.</div>";
+        }
+      }
+
+      function updateLocation() {
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              const { latitude, longitude } = position.coords;
+              checkBoundary(latitude, longitude);
+
+              if (currentLocationMarker) map.removeLayer(currentLocationMarker);
+              currentLocationMarker = L.marker([latitude, longitude], {
+                title: "Current Location",
+              }).addTo(map);
+              map.setView([latitude, longitude], 17);
+            },
+            (error) => {
+              switch (error.code) {
+                case error.PERMISSION_DENIED:
+                  console.error("Geolocation permission denied.");
+                  alert(
+                    "Location access was denied. Please allow location access to use this feature."
+                  );
+                  break;
+                case error.POSITION_UNAVAILABLE:
+                  console.error("Location information is unavailable.");
+                  alert("Location information is currently unavailable.");
+                  break;
+                case error.TIMEOUT:
+                  console.error("The request to get user location timed out.");
+                  alert("Location request timed out. Try again.");
+                  break;
+                default:
+                  console.error("An unknown error occurred.");
+                  alert(
+                    "An unknown error occurred while trying to access location."
+                  );
+                  break;
+              }
+            },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+          );
+        } else {
+          alert("Geolocation is not supported by this browser.");
+        }
+      }
+
+      function trackLiveLocation() {
+        updateLocation();
+        setInterval(updateLocation, refreshInterval);
+      }
+    </script>
+  </body>
+</html>
